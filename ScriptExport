@@ -1,0 +1,146 @@
+import bpy
+import os
+
+
+obj = bpy.context.active_object #defining the environnement
+mate = list(obj.data.materials) #defining material list
+image_name = obj.name + '_BakedTexture'
+texture_node_type = ['DIFFUSE', 'ROUGHNESS', 'GLOSSY', 'NORMAL', 'AO'] #type de textures
+texture_path = "C:\\Users\\G\\Documents\\enfin_un_doss_pour_se_baker\\" #filepath
+dim_image = 128 # You can choose your texture size (This will be the de bake image)
+bpy.context.scene.render.image_settings.compression = 100 #compression
+
+imgbsdf = [] #create a list of the image textures for later
+for r in texture_node_type:
+
+    image_name_type = image_name, r
+    img = bpy.data.images.new(str(image_name_type), dim_image, dim_image)
+    imgbsdf.append(img)
+    
+#Due to the presence of any multiple materials, it seems necessary to iterate on all the materials, and assign them a node + the image to bake.
+for mat in mate: #obj.data.materials
+
+    mat.use_nodes = True #Here it is assumed that the materials have been created with nodes, otherwise it would not be possible to assign a node for the Bake, so this step is a bit useless
+    nodes = mat.node_tree.nodes
+
+    for r in texture_node_type: #creating nodes and assign it
+         texture_node = nodes.new('ShaderNodeTexImage')
+         texture_node.name = r
+         texture_node.select = True
+         nodes.active = texture_node
+         texture_node.image = img #Assign the image to the node
+
+for r in texture_node_type: #bake to the corresponding images
+     bpy.context.view_layer.objects.active = obj
+     bpy.ops.object.bake(type = r, save_mode='EXTERNAL')
+     texture_path_and_name_of_texture = texture_path, r, "_", image_name, '.png'
+     img.save_render(filepath = "".join(texture_path_and_name_of_texture))
+     print("BAKING ",r)
+
+
+print('creating the shaders')
+
+
+bsdf = bpy.data.materials.new("ExportTexture") #creating bsdf
+bsdf.use_nodes = True
+nt_bsdf = bsdf.node_tree.nodes
+links = bsdf.node_tree.links
+location = -200
+locationy = 100
+pBSDF = nt_bsdf.get("Principled BSDF")
+output = nt_bsdf.get("Material Output")
+pngname = 0
+
+for w in imgbsdf: #creating the new images slots
+    texture_node_bsdf = nt_bsdf.new('ShaderNodeTexImage')
+    texture_node_bsdf.name = str(w)
+    texture_node_bsdf.location = (location, locationy)
+    location += -150
+    locationy += -200
+    print (texture_node_bsdf)
+    texture_node_bsdf.select = True
+    nt_bsdf.active = texture_node_bsdf
+    texture_node_bsdf.image = w #Assign the image to the node
+    print (texture_node_bsdf)
+    print ("ASSIGNING ", str(texture_node_type[pngname]))
+    namecheck = texture_node_type[pngname]
+    pngname += 1
+    
+    #LINKING PROBABLY NOT OPTIMISED    
+
+
+    #DIFFUSE LINKING
+    if namecheck.find("DIFFUSE") != -1:
+        links.new(texture_node_bsdf.outputs[0], pBSDF.inputs[0])
+        print ("FOUND DIFFUSE!")
+    #GLOSSY LINKING
+    if namecheck.find("GLOSSY") != -1:
+        texture_node_bsdf.image.colorspace_settings.name = 'Non-Color'
+        links.new(texture_node_bsdf.outputs[0], pBSDF.inputs[6])
+        print ("FOUND GLOSSY!")
+    #ROUGHNESS LINKING
+    if namecheck.find("ROUGHNESS") != -1:
+        texture_node_bsdf.image.colorspace_settings.name = 'Non-Color'
+        links.new(texture_node_bsdf.outputs[0], pBSDF.inputs[9])
+        print ("FOUND ROUGHNESS!")
+    #NORMAL LINKING
+    if namecheck.find("NORMAL") != -1:
+        normalnode = nt_bsdf.new('ShaderNodeNormalMap')
+        links.new(texture_node_bsdf.outputs[0], normalnode.inputs[1])
+        links.new(normalnode.outputs[0], pBSDF.inputs[22])
+        print ("FOUND NORMAL!")
+    #AO LINKING
+    if namecheck.find("AO") != -1:
+        #group
+        group = bpy.data.node_groups.new(type="ShaderNodeTree", name="gLTF settings")
+        group.inputs.new("NodeSocketFloat", "Occlusion")
+        input_node = group.nodes.new("NodeGroupInput")
+        #instancingandlinking
+        instance = nt_bsdf.new('ShaderNodeGroup')
+        instance.node_tree = group
+        links.new(texture_node_bsdf.outputs[0], instance.inputs[0])
+        print ("FOUND AO!")
+    
+        
+    
+xyz = 0
+# Get materials
+mati = bpy.data.materials.get("Material")
+if mati is None:
+    # bsdf reference material
+    mati = bsdf
+
+
+if mati:
+    # assign to all materials slot
+    xyz = 0
+    for s in obj.data.materials:
+        obj.data.materials[xyz] = bsdf
+        xyz += 1
+        print("REPLACED ", s, "BY", bsdf)
+else:
+    # no slots
+    obj.data.materials.append(mat)
+    
+    
+"""
+old_mat = bpy.data.materials.get("The name of material to replace")
+new_mat = bpy.data.materials.get("The name of the new material")
+old_mat.user_remap(new_mat)
+"""
+
+#In the last step, we are going to try and assign the nodes we created earlier to bake to the PBR setup
+#for mat in obj.data.materials:
+    #for n in mat.node_tree.nodes:
+        #if n.name == 'Bake_node':
+            #mat.node_tree.nodes.remove(n)
+
+#BSDF creation setup
+#bsdf = bpy.data.materials.new("BSDFEXPORT")
+#bsdf.use_nodes = True
+#node_tree_bsdf = bsdf.node_tree
+
+#links
+#node_tree.links.new(vcol.outputs[0], bsdf.inputs[0])
+texturepathexport = texture_path, obj.name
+bpy.ops.export_scene.gltf(filepath="".join(texturepathexport), check_existing=False, export_format='GTLF', ui_tab='GENERAL', export_image_format='JPEG', export_texture_dir="C:\\TEMP", export_keep_originals=False, export_texcoords=True, export_normals=True, export_draco_mesh_compression_enable=False, export_tangents=False, export_materials='EXPORT', export_colors=True, use_mesh_edges=False, use_mesh_vertices=False, export_cameras=False, export_selected=False, use_selection=False, use_visible=False, use_renderable=False, use_active_collection=False, export_extras=False, export_yup=False, export_apply=False, export_animations=False, export_frame_range=True, export_frame_step=1, export_force_sampling=True, export_nla_strips=True, export_def_bones=False, optimize_animation_size=True, export_current_frame=True, export_skins=False, export_all_influences=False, export_morph=False, export_morph_normal=False, export_morph_tangent=False, export_lights=False, export_displacement=True, will_save_settings=False)
